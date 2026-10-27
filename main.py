@@ -400,7 +400,7 @@ def get_user_command() -> str:
         speak("สวัสดีครับ พร้อมรับคำสั่งแล้วครับ กรุณาพูดคำสั่งได้เลยครับ")
         try:
             print("\n🎙️ กำลังเตรียมฟังเสียง...")
-            cmd = stt.listen_command(duration=5.0)
+            cmd = stt.listen_command()
             return cmd
         except Exception as e:
             print(f"⚠️ เกิดข้อผิดพลาดในการฟังเสียง ({e}) สลับเป็นโหมดพิมพ์ข้อความแทน:")

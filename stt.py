@@ -4,8 +4,7 @@
 """
 
 import sys
-import os
-from typing import Optional
+import queue
 from pathlib import Path
 import numpy as np
 
@@ -32,11 +31,13 @@ def get_whisper_model(model_name: str = "medium"):
 
 def record_audio(
     output_file: str = "recorded_command.wav",
-    duration: float = 5.0,
     sample_rate: int = 16000,
+    silence_duration: float = 1.2,
+    silence_threshold: float = 500.0,
+    pre_roll_duration: float = 0.3,
 ) -> str:
     """
-    บันทึกเสียงจากไมโครโฟนตามเวลาที่กำหนด (วินาที)
+    ฟังเสียงต่อเนื่องและหยุดเมื่อมีเสียงพูดแล้วเงียบต่อเนื่องตามเวลาที่กำหนด
     """
     try:
         import sounddevice as sd
@@ -44,17 +45,70 @@ def record_audio(
     except ImportError as e:
         raise ImportError(f"ต้องติดตั้ง sounddevice และ scipy เพื่ออัดเสียงจากไมโครโฟน: {e}")
 
-    print(f"🎙️ กำลังบันทึกเสียง {duration} วินาที... (พูดคำสั่งได้เลย)")
-    audio_data = sd.rec(
-        int(duration * sample_rate),
-        samplerate=sample_rate,
-        channels=1,
-        dtype="int16",
-    )
-    sd.wait()  # รอจนกว่าจะอัดเสียงเสร็จ
-    print("⏹️ บันทึกเสียงเสร็จสิ้น")
+    block_duration = 0.05
+    block_size = int(sample_rate * block_duration)
+    pre_roll_blocks = max(1, int(pre_roll_duration / block_duration))
+    audio_queue: queue.Queue = queue.Queue()
+    recent_audio = []
+    recorded_audio = []
+    speech_detected = False
+    quiet_seconds = 0.0
+    noise_floor = 100.0
 
+    def enqueue_audio(indata, frames, time_info, status):
+        if status:
+            print(f"⚠️ สถานะไมโครโฟน: {status}")
+        audio_queue.put(indata.copy())
+
+    print("🎙️ กำลังฟังอยู่ พูดคำสั่งได้เลย... (จะหยุดเมื่อเงียบต่อเนื่อง)")
+    try:
+        with sd.InputStream(
+            samplerate=sample_rate,
+            channels=1,
+            dtype="int16",
+            blocksize=block_size,
+            callback=enqueue_audio,
+        ):
+            while True:
+                chunk = audio_queue.get()
+                rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+                threshold = max(silence_threshold, noise_floor * 2.5)
+                is_speech = rms >= threshold
+
+                if not speech_detected:
+                    if is_speech:
+                        speech_detected = True
+                        recorded_audio.extend(recent_audio)
+                        recorded_audio.append(chunk)
+                        print("🗣️ ตรวจพบเสียงพูด กำลังฟังต่อ...")
+                    else:
+                        recent_audio.append(chunk)
+                        if len(recent_audio) > pre_roll_blocks:
+                            recent_audio.pop(0)
+                        noise_floor = noise_floor * 0.95 + rms * 0.05
+                    continue
+
+                recorded_audio.append(chunk)
+                if is_speech:
+                    quiet_seconds = 0.0
+                else:
+                    quiet_seconds += len(chunk) / sample_rate
+                    noise_floor = noise_floor * 0.95 + rms * 0.05
+
+                if quiet_seconds >= silence_duration:
+                    break
+    except KeyboardInterrupt:
+        if not speech_detected:
+            raise
+
+    if not speech_detected or not recorded_audio:
+        print("⚠️ ยังไม่ได้รับเสียงพูด")
+        wavfile.write(output_file, sample_rate, np.zeros((0, 1), dtype=np.int16))
+        return output_file
+
+    audio_data = np.concatenate(recorded_audio, axis=0)
     wavfile.write(output_file, sample_rate, audio_data)
+    print(f"⏹️ หยุดฟังหลังเงียบ {silence_duration:.1f} วินาที")
     return output_file
 
 
@@ -109,14 +163,19 @@ def transcribe_audio(
 
 
 def listen_command(
-    duration: float = 5.0,
     model_name: str = "medium",
     temp_file: str = "command.wav",
+    silence_duration: float = 1.2,
 ) -> str:
     """
     ฟังก์ชันแบบครบวงจร: อัดเสียงจากไมค์ -> ถอดความเป็นข้อความ
     """
-    audio_path = record_audio(output_file=temp_file, duration=duration)
+    audio_path = record_audio(output_file=temp_file, silence_duration=silence_duration)
+    from scipy.io import wavfile
+    _, audio_data = wavfile.read(audio_path)
+    if audio_data.size == 0:
+        print("📝 ไม่พบคำสั่งเสียง")
+        return ""
     text = transcribe_audio(audio_path, model_name=model_name, language="th")
     print(f"📝 ได้รับคำสั่ง: '{text}'")
     return text
@@ -132,6 +191,5 @@ if __name__ == "__main__":
         else:
             print(f"ไม่พบไฟล์ {f}")
     else:
-        sec = float(input("กำหนดเวลาอัดเสียง (วินาที) [ค่าเริ่มต้น 5]: ") or "5")
-        res = listen_command(duration=sec)
+        res = listen_command()
         print("ข้อความที่ได้:", res)
