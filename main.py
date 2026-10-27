@@ -44,9 +44,15 @@ SYSTEM_INSTRUCTION = """คุณคือ Computer Control Agent ผู้เ�
 
 ในแต่ละขั้นตอน คุณจะได้รับ:
 1. คำสั่งเป้าหมายของผู้ใช้ (User Goal)
-2. ขนาดหน้าจอปัจจุบัน (Screen Resolution: width x height)
+2. ขนาดภาพหน้าจอที่แนบมา และขนาดพิกัดเมาส์ของระบบ
 3. ภาพหน้าจอปัจจุบัน (Screenshot)
 4. ประวัติการกระทำก่อนหน้านี้ (Action History)
+
+กฎการอ่านพิกัดจากภาพ:
+- พิกัด x,y และ end_x,end_y ต้องอ้างอิงจากภาพหน้าจอที่แนบมา โดยมุมซ้ายบนคือ (0,0) และ x เพิ่มไปทางขวา, y เพิ่มลงล่าง
+- ใช้ความกว้างและความสูงของภาพที่ระบุในข้อความเป็นขอบเขตพิกัด ห้ามใช้ขนาดที่คาดเดาเอง
+- เมื่อชี้ไปยังปุ่มหรือไอคอน ให้เลือกบริเวณกึ่งกลางของเป้าหมาย หลีกเลี่ยงขอบหรือพื้นที่ว่างข้างเคียง
+- หากเป้าหมายเล็กหรือไม่ชัด ให้เลือก action แบบ wait เพื่อให้ตรวจภาพใหม่ แทนการเดาพิกัด
 
 ============================================================
 กฎสำคัญในการเลือกวิธีสั่งการ (Action Priority Rules):
@@ -111,28 +117,55 @@ SYSTEM_INSTRUCTION = """คุณคือ Computer Control Agent ผู้เ�
 """
 
 
-def execute_action(action_data: Dict[str, Any], screen_w: int, screen_h: int) -> bool:
+def _map_image_coordinate(value: Any, image_size: int, screen_size: int) -> Optional[int]:
+    """แปลงพิกัดจากภาพที่ AI เห็นไปยังพิกัดจริงที่ PyAutoGUI ใช้"""
+    if value is None:
+        return None
+    try:
+        coordinate = int(round(float(value)))
+    except (TypeError, ValueError):
+        print(f"⚠️ ข้ามพิกัดที่ไม่ใช่ตัวเลข: {value!r}")
+        return None
+
+    if image_size <= 0 or screen_size <= 0:
+        return None
+    bounded = max(0, min(image_size - 1, coordinate))
+    if bounded != coordinate:
+        print(f"⚠️ พิกัด {coordinate} อยู่นอกภาพ จึงจำกัดให้อยู่ในช่วง 0 ถึง {image_size - 1}")
+    if image_size == screen_size:
+        return bounded
+    return round(bounded * (screen_size - 1) / (image_size - 1)) if image_size > 1 else 0
+
+
+def execute_action(
+    action_data: Dict[str, Any],
+    screen_w: int,
+    screen_h: int,
+    image_w: Optional[int] = None,
+    image_h: Optional[int] = None,
+) -> bool:
     """
     แปลงคำสั่ง JSON จาก AI เป็นการควบคุมเมาส์และคีย์บอร์ดจริง
     คืนค่า True หากถึงขั้นตอนสิ้นสุด (done)
     """
     action = action_data.get("action", "").lower()
-    x = action_data.get("x")
-    y = action_data.get("y")
+    image_w = image_w or screen_w
+    image_h = image_h or screen_h
+    x = _map_image_coordinate(action_data.get("x"), image_w, screen_w)
+    y = _map_image_coordinate(action_data.get("y"), image_h, screen_h)
     done = action_data.get("done", False)
 
-    # ปรับพิกัดให้อยู่ในขอบเขตหน้าจอ
-    if x is not None:
-        x = max(0, min(screen_w - 1, int(x)))
-    if y is not None:
-        y = max(0, min(screen_h - 1, int(y)))
+    print(f"👉 กำลังดำเนินการ: {action} (image=({action_data.get('x')}, {action_data.get('y')}), screen=({x}, {y}))")
 
-    print(f"👉 กำลังดำเนินการ: {action} (x={x}, y={y})")
+    def log_actual_position() -> None:
+        actual_x, actual_y = mouse.get_position()
+        print(f"📍 ตำแหน่งเมาส์จริง: ({actual_x}, {actual_y})")
 
     if action == "click":
         if x is not None and y is not None:
             print(f"👀 เลื่อนเคอร์เซอร์ไปที่ ({x}, {y}) เพื่อตรวจสอบตำแหน่งหน้าจอก่อนกด...")
             mouse.move_to(x, y, duration=0.25)
+            log_actual_position()
             time.sleep(0.2)  # หยุดดูภาพหน้าจอตรงตำแหน่งเคอร์เซอร์ก่อนกด
             print(f"🖱️ ทำการคลิกซ้ายที่ ({x}, {y})")
             mouse.click(x, y)
@@ -143,6 +176,7 @@ def execute_action(action_data: Dict[str, Any], screen_w: int, screen_h: int) ->
         if x is not None and y is not None:
             print(f"👀 เลื่อนเคอร์เซอร์ไปที่ ({x}, {y}) ก่อนดับเบิลคลิก...")
             mouse.move_to(x, y, duration=0.25)
+            log_actual_position()
             time.sleep(0.2)
             print(f"🖱️ ทำการดับเบิลคลิกที่ ({x}, {y})")
             mouse.double_click(x, y)
@@ -153,6 +187,7 @@ def execute_action(action_data: Dict[str, Any], screen_w: int, screen_h: int) ->
         if x is not None and y is not None:
             print(f"👀 เลื่อนเคอร์เซอร์ไปที่ ({x}, {y}) ก่อนคลิกขวา...")
             mouse.move_to(x, y, duration=0.25)
+            log_actual_position()
             time.sleep(0.2)
             print(f"🖱️ ทำการคลิกขวาที่ ({x}, {y})")
             mouse.right_click(x, y)
@@ -163,13 +198,15 @@ def execute_action(action_data: Dict[str, Any], screen_w: int, screen_h: int) ->
         if x is not None and y is not None:
             print(f"👀 เลื่อนเมาส์ไปที่ ({x}, {y})")
             mouse.move_to(x, y, duration=0.25)
+            log_actual_position()
 
     elif action == "drag":
-        end_x = action_data.get("end_x", x)
-        end_y = action_data.get("end_y", y)
+        end_x = _map_image_coordinate(action_data.get("end_x", action_data.get("x")), image_w, screen_w)
+        end_y = _map_image_coordinate(action_data.get("end_y", action_data.get("y")), image_h, screen_h)
         if x is not None and y is not None and end_x is not None and end_y is not None:
             print(f"🖱️ ลากเมาส์จาก ({x}, {y}) ไปยัง ({end_x}, {end_y})")
             mouse.drag(x, y, int(end_x), int(end_y), duration=0.5)
+            log_actual_position()
 
     elif action == "scroll":
         clicks = int(action_data.get("scroll_clicks", -3))
@@ -285,14 +322,18 @@ def run_agent_loop(goal: str, max_steps: int = 15) -> str:
 
         # 1. ถ่ายภาพหน้าจอแบบบีบอัด JPEG (ขนาดไฟล์ ~100KB ส่งไวมาก)
         print("📸 ถ่ายภาพหน้าจอปัจจุบัน...")
-        screen_capture.capture_screen(save_path=screenshot_path, quality=70)
+        # เพิ่มคุณภาพ JPEG เพื่อรักษาขอบปุ่มและไอคอนขนาดเล็กที่ AI ใช้กะพิกัด
+        screenshot = screen_capture.capture_screen(save_path=screenshot_path, quality=90)
+        image_w, image_h = screenshot.size
         img_part = prepare_image_part(screenshot_path)
 
         # 2. จัดเตรียม Prompt สำหรับ Gemini
         history_str = "\n".join([f"- {h}" for h in history]) if history else "ยังไม่มีการกระทำก่อนหน้านี้ (เพิ่งเริ่มต้น)"
         prompt = f"""
 เป้าหมายของผู้ใช้ (User Goal): "{goal}"
-ขนาดหน้าจอ (Screen Resolution): กว้าง {screen_w} x สูง {screen_h} พิกเซล
+ขนาดภาพที่แนบให้วิเคราะห์: กว้าง {image_w} x สูง {image_h} พิกเซล
+ขนาดพิกัดเมาส์ของระบบ: กว้าง {screen_w} x สูง {screen_h} พิกเซล
+พิกัดทุกค่าที่ตอบกลับต้องอ้างอิงจากภาพ {image_w}x{image_h}; ระบบจะแปลงไปยังพิกัดเมาส์ให้อัตโนมัติ
 ประวัติการกระทำก่อนหน้านี้:
 {history_str}
 
@@ -316,7 +357,7 @@ def run_agent_loop(goal: str, max_steps: int = 15) -> str:
             print(f"📢 แจ้งสถานะ: {summary}")
 
         # 5. สั่งควบคุมเมาส์ / คีย์บอร์ด
-        is_done = execute_action(action_data, screen_w, screen_h)
+        is_done = execute_action(action_data, screen_w, screen_h, image_w, image_h)
 
         # บันทึกประวัติ
         action_name = action_data.get("action")
