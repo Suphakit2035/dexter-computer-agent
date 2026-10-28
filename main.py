@@ -433,4 +433,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--console" in sys.argv:
+        main()
+    else:
+        from widget import launch_widget
+
+        launch_widget(
+            run_agent=lambda goal: run_agent_loop(goal=goal, max_steps=12),
+            listen_command=stt.listen_command,
+            speak=speak,
+            api_key_available=bool(os.environ.get("GEMINI_API_KEY")),
+        )
