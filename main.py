@@ -27,6 +27,7 @@ load_dotenv()
 import mouse_event as mouse
 import screen_capture
 import browser_tools
+import basic_functions
 from tts import speak
 import stt
 from gemini_ai import get_gemini_client
@@ -34,6 +35,7 @@ from google.genai import types
 
 # ลำดับโมเดลที่เรียกใช้งาน (หากตัวใดติดคิว 503 หรือ Quota จะสลับไปยังโมเดลถัดไปทันที)
 CANDIDATE_MODELS = [
+    "gemini-3.5-flash-lite",
     "gemini-flash-lite-latest",
     "gemini-3.8-flash",
     "gemini-3.5-flash",
@@ -80,11 +82,14 @@ SYSTEM_INSTRUCTION = """คุณคือ Computer Control Agent มีชื�
 
 2. 【สำหรับแอปเดสก์ท็อป: ใช้คีย์ลัดหรือคีย์บอร์ดก่อนเมาส์】
    - หากเป้าหมายสามารถทำได้ด้วยการกดปุ่มคีย์บอร์ดหรือคีย์ลัด ให้เลือกใช้คีย์ลัดก่อนเสมอ เพราะแม่นยำ รวดเร็ว และไม่ผิดพลาด
-   - 【กฎตายตัวเมื่อผู้ใช้สั่งเปิดโปรแกรม】ให้ทำตามลำดับนี้เท่านั้น: action "press_key" โดย key="win" เพื่อเปิด Start, action "type" เพื่อพิมพ์ชื่อโปรแกรมที่ผู้ใช้ระบุ, แล้ว action "press_key" โดย key="enter" เพื่อเปิดโปรแกรม
-   - ระหว่างเปิดโปรแกรม ห้ามใช้เมาส์, browser_open, hotkey หรือวิธีค้นหาอื่นแทนลำดับ Win → พิมพ์ชื่อโปรแกรม → Enter; หลังจากนั้นตรวจภาพหน้าจอว่าหน้าต่างโปรแกรมเปิดแล้วก่อนจบงาน
+   - 【กฎตายตัวเมื่อผู้ใช้สั่งเปิดโปรแกรม】ให้เรียก action "basic_open_program" พร้อมชื่อใน "app_name" เท่านั้น; ฟังก์ชันนี้จะกด Win → พิมพ์ชื่อโปรแกรม → Enter ตามลำดับ
+   - ห้ามใช้เมาส์, browser_open, hotkey หรือวิธีค้นหาอื่นเพื่อเปิดโปรแกรม; หลังเรียกฟังก์ชันให้ตรวจภาพหน้าจอว่าหน้าต่างโปรแกรมเปิดแล้วก่อนจบงาน
+   - ย่อทุกหน้าต่างใช้ "basic_minimize_all"; คืนหน้าต่างที่ย่อไว้ใช้ "basic_restore_minimized"; สลับหน้าต่างใช้ "basic_switch_window"; ปิดหน้าต่างปัจจุบันใช้ "basic_close_active_window"
+   - เปิดไฟล์ตาม path ที่ผู้ใช้ให้ด้วย "basic_open_file"; ค้นหาไฟล์ด้วย "basic_search_files" และใส่ "search_name" กับ "search_root" (ถ้าไม่ระบุ root ให้ค้นในโฟลเดอร์ผู้ใช้)
+   - หลังเปิดโปรแกรม/ไฟล์ หรือสั่งย่อ/คืน/สลับ/ปิด ให้ดูภาพหน้าจอรอบใหม่เพื่อยืนยันผล; หลังค้นหาไฟล์ให้ใช้รายการ path ที่คืนมา และอย่าเดา path เอง
    - ตัวอย่างการใช้คีย์ลัดเป็นหลัก:
-     * ต้องการเปิด Start Menu หรือค้นหาบน Windows -> ให้ใช้ "press_key" ด้วย "key": "win" ก่อนเสมอ (แทนการเอาเมาส์ไปคลิกปุ่ม Start)
-     * ต้องการเปิดแอป/โปรแกรม -> ให้กด "win" แล้ว "type" ชื่อโปรแกรม เช่น "chrome" หรือ "terminal" แล้วกด "enter"
+     * ต้องการเปิด Start Menu -> ให้ใช้ "press_key" ด้วย "key": "win" (แทนการเอาเมาส์ไปคลิกปุ่ม Start)
+     * ต้องการเปิดแอป/โปรแกรม -> ใช้กฎตายตัว "basic_open_program" ด้านบนเท่านั้น
      * ต้องการเปิดหน้าต่าง Run -> ให้ใช้ "hotkey" ด้วย "keys": ["win", "r"]
      * ต้องการเปิดแท็บใหม่บน Browser -> ให้ใช้ "hotkey" ด้วย "keys": ["ctrl", "t"]
      * ต้องการปิดหน้าต่างหรือแท็บ -> ให้ใช้ "hotkey" ด้วย ["ctrl", "w"] หรือ ["alt", "f4"]
@@ -126,6 +131,13 @@ SYSTEM_INSTRUCTION = """คุณคือ Computer Control Agent มีชื�
 14. "browser_click" - คลิก element ด้วย ref จาก snapshot (แนะนำ) หรือ CSS selector ที่มีหลักฐาน ระบุใน "selector"
 15. "browser_fill" - กรอกช่องฟอร์มด้วย ref จาก snapshot (แนะนำ) หรือ CSS selector ระบุ "selector" และ "text"
 16. "browser_press" - กดปุ่มใน element ด้วย ref จาก snapshot (แนะนำ) หรือ CSS selector ระบุ "selector" และ "key"
+17. "basic_open_program" - เปิดโปรแกรมผ่าน Win → พิมพ์ชื่อ → Enter ระบุ "app_name"
+18. "basic_minimize_all" - ย่อหน้าต่างทั้งหมด
+19. "basic_restore_minimized" - คืนหน้าต่างที่ย่อไว้
+20. "basic_switch_window" - สลับไปหน้าต่างก่อนหน้า
+21. "basic_close_active_window" - ปิดหน้าต่างที่กำลังใช้งาน
+22. "basic_open_file" - เปิดไฟล์/โฟลเดอร์ด้วยแอปเริ่มต้น ระบุ "file_path"
+23. "basic_search_files" - ค้นหาชื่อไฟล์/โฟลเดอร์ในเครื่อง ระบุ "search_name" และ "search_root" (ไม่บังคับ)
 
 เมื่อเป้าหมายเป็นเว็บไซต์ ให้ใช้ browser actions เพื่ออ่าน DOM และโต้ตอบกับ element โดยตรงก่อนใช้เมาส์จากภาพ
 หลัง browser action ระบบจะแนบข้อความ DOM ล่าสุดในรอบถัดไป ใช้ ref เช่น E0 จาก snapshot ล่าสุดเป็น selector ได้โดยตรง; ห้ามเดา ref, selector หรือ URL ที่ไม่มีหลักฐานจากคำสั่ง/DOM
@@ -137,7 +149,7 @@ SYSTEM_INSTRUCTION = """คุณคือ Computer Control Agent มีชื�
 โครงสร้าง JSON ที่ต้องตอบกลับเท่านั้น:
 {
   "thought": "อธิบายสิ่งที่เห็นบนจอ ตรวจสอบหน้าจอก่อนกด และเหตุผลในการเลือกใช้คีย์ลัดหรือเมาส์",
-  "action": "press_key | hotkey | type | click | double_click | right_click | move | drag | scroll | browser_open | browser_snapshot | browser_click | browser_fill | browser_press | wait | finish",
+  "action": "press_key | hotkey | type | click | double_click | right_click | move | drag | scroll | browser_open | browser_snapshot | browser_click | browser_fill | browser_press | basic_open_program | basic_minimize_all | basic_restore_minimized | basic_switch_window | basic_close_active_window | basic_open_file | basic_search_files | wait | finish",
   "confirmed": true/false (ตั้ง true หลังตรวจปลายลูกศรเมาส์และยืนยันตำแหน่งคลิกหรือเลื่อนเท่านั้น),
   "grid_col": หมายเลขคอลัมน์กริดเริ่มจาก 0 หรือ null,
   "grid_row": หมายเลขแถวกริดเริ่มจาก 0 หรือ null,
@@ -152,6 +164,10 @@ SYSTEM_INSTRUCTION = """คุณคือ Computer Control Agent มีชื�
   "text": "ข้อความที่พิมพ์ (สำหรับ type) หรือ null",
   "url": "URL (สำหรับ browser_open) หรือ null",
   "selector": "CSS selector (สำหรับ browser_click/browser_fill/browser_press) หรือ null",
+  "app_name": "ชื่อโปรแกรมสำหรับ basic_open_program หรือ null",
+  "file_path": "path ของไฟล์/โฟลเดอร์สำหรับ basic_open_file หรือ null",
+  "search_name": "ชื่อหรือส่วนหนึ่งของชื่อไฟล์สำหรับ basic_search_files หรือ null",
+  "search_root": "โฟลเดอร์เริ่มค้นหา (ไม่บังคับ; ค่าเริ่มต้นคือโฟลเดอร์ผู้ใช้) หรือ null",
   "keys": ["ปุ่ม1", "ปุ่ม2"] (สำหรับ hotkey) หรือ null,
   "wait_seconds": วินาทีที่รอ หรือ null,
   "done": true/false,
@@ -288,6 +304,33 @@ def execute_action(
                 exc, browser_tools.BrowserUnavailableError
             )
             print(f"⚠️ Playwright ทำงานไม่สำเร็จ: {exc}")
+
+    elif action.startswith("basic_"):
+        try:
+            if action == "basic_open_program":
+                result = basic_functions.open_program(str(action_data.get("app_name", "")))
+            elif action == "basic_minimize_all":
+                result = basic_functions.minimize_all()
+            elif action == "basic_restore_minimized":
+                result = basic_functions.restore_minimized()
+            elif action == "basic_switch_window":
+                result = basic_functions.switch_window()
+            elif action == "basic_close_active_window":
+                result = basic_functions.close_active_window()
+            elif action == "basic_open_file":
+                result = basic_functions.open_file(str(action_data.get("file_path", "")))
+            elif action == "basic_search_files":
+                result = basic_functions.search_files(
+                    str(action_data.get("search_name", "")),
+                    str(action_data.get("search_root", "") or ""),
+                )
+            else:
+                raise ValueError(f"ไม่รองรับ basic action: {action}")
+            action_data["basic_result"] = result
+            print(f"🧰 Basic action {action}: {result}")
+        except Exception as exc:
+            action_data["basic_result"] = f"Basic action error: {exc}"
+            print(f"⚠️ Basic action ทำงานไม่สำเร็จ: {exc}")
 
     elif action == "wait":
         sec = float(action_data.get("wait_seconds", 1.0))
@@ -594,6 +637,7 @@ def run_agent_loop(goal: str, max_steps: int = 20) -> str:
 
     screenshot_path = "current_screen.jpg"
     browser_context = "ยังไม่ได้เปิด Playwright browser session ในภารกิจนี้."
+    basic_context = "ยังไม่มีผลลัพธ์จาก basic functions ในภารกิจนี้."
 
     for step in range(1, max_steps + 1):
         print(f"\n--- [ขั้นตอนที่ {step}/{max_steps}] ---")
@@ -632,6 +676,8 @@ def run_agent_loop(goal: str, max_steps: int = 20) -> str:
 {history_str}
 ข้อความจาก DOM ของเว็บไซต์ (ถ้ามี):
 {browser_context}
+ผลลัพธ์จาก basic functions (ถ้ามี):
+{basic_context}
 {verification_prompt}
 
 ดูภาพหน้าจอที่แนบมานี้ แล้วตัดสินใจเลือก Action ถัดไปในรูปแบบ JSON:
@@ -694,11 +740,15 @@ def run_agent_loop(goal: str, max_steps: int = 20) -> str:
                 action_data, pending_move, screen_w, screen_h, image_w, image_h
             )
             explicitly_confirmed = action_data.get("confirmed") is True
-            if action_name == "move" and same_point and explicitly_confirmed:
+            # For a move confirmation, the screenshot describes the cursor's
+            # current position. Ignore any newly proposed grid point when the AI
+            # confirms that current cursor is already on target; otherwise a
+            # center-of-cell coordinate can trigger an unnecessary second move.
+            if action_name == "move" and explicitly_confirmed:
                 pending_move = None
                 verification_attempts = 0
                 is_done = bool(action_data.get("done", False))
-                print("✅ AI ตรวจภาพลูกศรแล้วยืนยันตำแหน่งเมาส์")
+                print("✅ AI ยืนยันตำแหน่งเมาส์ปัจจุบันจากภาพ; คงพิกัดเดิม")
             elif action_name == "wait":
                 execute_action(action_data, screen_w, screen_h, image_w, image_h)
                 verification_attempts += 1
@@ -780,6 +830,8 @@ def run_agent_loop(goal: str, max_steps: int = 20) -> str:
 
         if action_name.startswith("browser_") and action_data.get("browser_result"):
             browser_context = str(action_data["browser_result"])
+        if action_name.startswith("basic_") and action_data.get("basic_result"):
+            basic_context = str(action_data["basic_result"])
 
         if (pending_click is not None or pending_move is not None) and verification_attempts >= max_verification_attempts:
             final_summary = "ระบบยกเลิกการดำเนินการ เพราะ AI ยังยืนยันตำแหน่งจากภาพไม่ได้"
