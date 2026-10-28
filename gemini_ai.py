@@ -31,7 +31,13 @@ def get_gemini_client(api_key: Optional[str] = None) -> genai.Client:
             "ไม่พบ Gemini API Key กรุณาระบุผ่านพารามิเตอร์ api_key "
             "หรือตั้งค่า Environment Variable 'GEMINI_API_KEY'"
         )
-    return genai.Client(api_key=key)
+    return genai.Client(
+        api_key=key,
+        http_options=types.HttpOptions(
+            timeout=60_000,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
+    )
 
 
 def _load_image(image_input: Union[str, Path, Image.Image]) -> Image.Image:

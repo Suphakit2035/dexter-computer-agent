@@ -5,6 +5,7 @@
 
 import sys
 import asyncio
+import threading
 from pathlib import Path
 import edge_tts
 import pygame
@@ -34,6 +35,30 @@ async def _generate_audio_file(
     await communicate.save(output_file)
 
 
+def _run_tts_generation(text: str, output_file: str, voice: str) -> None:
+    """Run edge-tts safely even when speak() is called from an asyncio loop."""
+    coroutine = _generate_audio_file(text, output_file, voice=voice)
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(coroutine)
+        return
+
+    errors: list[BaseException] = []
+
+    def run_in_thread() -> None:
+        try:
+            asyncio.run(coroutine)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run_in_thread, name="dexter-tts", daemon=True)
+    worker.start()
+    worker.join()
+    if errors:
+        raise errors[0]
+
+
 def speak(
     text: str,
     voice: str = DEFAULT_VOICE,
@@ -57,7 +82,7 @@ def speak(
 
     # 1. สร้างไฟล์เสียงผ่าน edge-tts
     try:
-        asyncio.run(_generate_audio_file(clean_text, temp_file, voice=voice))
+        _run_tts_generation(clean_text, temp_file, voice)
     except Exception as e:
         print(f"เกิดข้อผิดพลาดในการแปลงข้อความเป็นเสียง (TTS): {e}")
         return
