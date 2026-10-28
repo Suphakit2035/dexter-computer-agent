@@ -61,12 +61,23 @@ def _ensure_page():
         _playwright = sync_playwright().start()
     if _browser is None:
         try:
-            _browser = _playwright.chromium.launch(headless=False)
-        except Exception as exc:
-            raise BrowserUnavailableError(
-                "เปิด Chromium ของ Playwright ไม่ได้: ติดตั้ง browser ด้วย "
-                "`python -m playwright install chromium`"
-            ) from exc
+            # Prefer the Windows Edge already installed on the user's machine.
+            # Some Windows environments block spawning Playwright's bundled Chrome
+            # as a visible process even though the same browser works headless.
+            _browser = _playwright.chromium.launch(
+                channel="msedge",
+                headless=False,
+            )
+            print("Playwright: Microsoft Edge started")
+        except Exception as edge_exc:
+            try:
+                _browser = _playwright.chromium.launch(headless=False)
+                print("Playwright: bundled Chromium started")
+            except Exception as chromium_exc:
+                raise BrowserUnavailableError(
+                    "เปิด Microsoft Edge และ Chromium ผ่าน Playwright ไม่ได้. "
+                    f"Edge error: {edge_exc}; Chromium error: {chromium_exc}"
+                ) from chromium_exc
     if _page is None or _page.is_closed():
         _page = _browser.new_page()
         _page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
